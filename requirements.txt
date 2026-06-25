@@ -1,0 +1,9 @@
+# Core runtime dependencies
+MetaTrader5>=5.0.45      # Official MetaQuotes Python<->terminal IPC bridge (Windows only)
+numpy>=1.24
+pandas>=2.0
+PyYAML>=6.0
+
+# Optional but recommended (the bot degrades gracefully if these are missing)
+statsmodels>=0.14        # Engle-Granger cointegration / ADF tests for pair selection
+hmmlearn>=0.3            # Gaussian HMM regime filter (optional gate)

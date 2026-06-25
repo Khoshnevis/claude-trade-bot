@@ -1,0 +1,88 @@
+# =============================================================================
+# Trade bot configuration
+# -----------------------------------------------------------------------------
+# All money figures are in the account's deposit currency.
+# Timeframes accept MT5 names: M1 M5 M15 M30 H1 H4 D1 W1 MN1
+# The MT5 terminal is assumed to be ALREADY LOGGED IN; no credentials are used.
+# =============================================================================
+
+mt5:
+  # Path to terminal64.exe. Leave null to let the package auto-discover the
+  # running terminal. Only set this if auto-discovery fails.
+  terminal_path: null
+  # Magic number stamps every order this bot places so it never touches
+  # positions opened by humans or other EAs.
+  magic: 770088
+  # Max acceptable slippage in points when sending market orders.
+  deviation_points: 20
+
+engine:
+  timeframe: H1            # bar cadence the bot trades on
+  poll_seconds: 15         # how often to check for a new closed bar
+  history_bars: 1500       # bars pulled per symbol each cycle
+  reconcile_seconds: 300   # how often to reconcile state vs broker
+  # Trading blackout windows (broker server time, HH:MM-HH:MM, 24h).
+  # Avoid the daily rollover spread widening (~17:00 New York).
+  blackouts:
+    - "23:55-00:10"
+
+risk:
+  risk_per_trade: 0.005          # 0.5% of equity risked per trade
+  max_risk_per_trade: 0.01       # hard ceiling
+  max_portfolio_heat: 0.02       # sum of open risk capped at 2% of equity
+  max_open_positions: 6
+  max_correlated_same_dir: 1     # max same-direction positions among correlated symbols
+  atr_period: 14
+  atr_stop_mult: 2.0             # stop distance = atr_stop_mult * ATR
+  atr_target_mult: 3.0           # take-profit distance for directional trades
+  drawdown_kill_pct: 0.12        # flatten + halt new trades at 12% DD from high-water mark
+  daily_loss_kill_pct: 0.03      # halt new trades for the day at 3% daily loss
+  min_volume_guard: true         # skip trades whose computed lot < symbol volume_min
+
+# Correlated clusters: the bot will not stack same-direction trend trades
+# across symbols inside one cluster (treats them as one risk unit).
+correlation_clusters:
+  - [EURUSD, GBPUSD]
+  - [AUDUSD, NZDUSD]
+  - [USDCAD]
+
+# -----------------------------------------------------------------------------
+# Engine 1: Kalman / cointegration mean-reversion pairs (market-neutral core)
+# -----------------------------------------------------------------------------
+pairs:
+  enabled: true
+  # Economically-linked candidates only. y = symbol_a, x = symbol_b.
+  pairs:
+    - { a: EURUSD, b: GBPUSD }
+    - { a: AUDUSD, b: NZDUSD }
+  delta: 1.0e-4            # Kalman state transition noise (hedge-ratio drift)
+  ve: 1.0e-3              # Kalman measurement noise
+  entry_z: 2.0             # enter when |z| crosses this
+  exit_z: 0.3              # exit when |z| falls back inside this
+  stop_z: 4.0             # hard stop if spread blows out beyond this
+  warmup_bars: 250         # Kalman burn-in before signals are trusted
+  recheck_coint: true      # require Engle-Granger cointegration on rolling window
+  coint_pvalue: 0.05
+  coint_lookback: 500
+
+# -----------------------------------------------------------------------------
+# Engine 2: Regime-filtered slow trend / momentum overlay
+# -----------------------------------------------------------------------------
+trend:
+  enabled: true
+  symbols: [EURUSD, USDJPY, AUDUSD, USDCAD]
+  fast_ma: 50
+  slow_ma: 200
+  donchian: 55             # breakout confirmation window
+  # HMM regime gate: only take trend trades when regime == trending.
+  use_hmm_regime: true
+  hmm_states: 3
+  hmm_retrain_bars: 500    # refit the HMM every N bars
+  hmm_lookback: 1000       # bars used to fit the HMM
+
+persistence:
+  db_path: state.sqlite
+
+logging:
+  level: INFO
+  file: trade_bot.log
