@@ -90,6 +90,11 @@ def print_report(cfg, res: Result) -> None:
             "trend_blocked_by_risk": "trend: blocked by risk gate",
             "trend_size_skip": "trend: skipped (lot < volume_min)",
             "trend_opened": "trend: positions opened",
+            "reversal_no_setup": "reversal: no top/bottom setup",
+            "reversal_entry_signal": "reversal: entry signals fired",
+            "reversal_blocked_by_risk": "reversal: blocked by risk gate",
+            "reversal_size_skip": "reversal: skipped (lot < volume_min)",
+            "reversal_opened": "reversal: positions opened",
         }
         for k, label in labels.items():
             if k in res.diag:

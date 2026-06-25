@@ -31,6 +31,40 @@ def donchian(df: pd.DataFrame, window: int) -> tuple[float, float]:
     return upper, lower
 
 
+def rsi(series: pd.Series, period: int = 14) -> float:
+    """Wilder's RSI of the last bar (0-100)."""
+    delta = series.diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.ewm(alpha=1 / period, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1 / period, adjust=False).mean()
+    last_loss = float(avg_loss.iloc[-1])
+    if last_loss == 0:
+        return 100.0
+    rs = float(avg_gain.iloc[-1]) / last_loss
+    return 100.0 - 100.0 / (1.0 + rs)
+
+
+def is_swing_low(df: pd.DataFrame, lookback: int, confirm: int = 1) -> bool:
+    """True if a swing low formed recently: the lowest low of the lookback
+    window is within the last `confirm` bars and price is turning back up."""
+    lows = df["low"]
+    window = lows.iloc[-lookback:]
+    recent_min_pos = window.values.argmin()
+    bars_since = len(window) - 1 - recent_min_pos
+    turning_up = float(df["close"].iloc[-1]) > float(df["close"].iloc[-2])
+    return bars_since <= confirm and turning_up
+
+
+def is_swing_high(df: pd.DataFrame, lookback: int, confirm: int = 1) -> bool:
+    highs = df["high"]
+    window = highs.iloc[-lookback:]
+    recent_max_pos = window.values.argmax()
+    bars_since = len(window) - 1 - recent_max_pos
+    turning_down = float(df["close"].iloc[-1]) < float(df["close"].iloc[-2])
+    return bars_since <= confirm and turning_down
+
+
 def log_returns(series: pd.Series) -> pd.Series:
     return np.log(series / series.shift(1)).dropna()
 

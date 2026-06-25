@@ -20,6 +20,10 @@ def trend_tag(symbol: str) -> str:
     return f"TR|{symbol}"
 
 
+def reversal_tag(symbol: str) -> str:
+    return f"RV|{symbol}"
+
+
 def pair_tag(a: str, b: str, leg: str) -> str:
     return f"KP|{a}{b}|{leg}"
 
@@ -39,6 +43,14 @@ class Executor:
             symbol, side, lots, sl=sl, tp=tp, comment=trend_tag(symbol)
         )
         return _ok(res)
+
+    # -- reversal (soft SL/TP, monitored by the engine) ----------------------
+    def open_reversal(self, symbol: str, side: str, lots: float) -> object:
+        """Open WITHOUT broker SL/TP; the engine monitors soft levels itself.
+        Returns the order result (so the caller can capture the ticket)."""
+        return self.client.market_order(
+            symbol, side, lots, sl=None, tp=None, comment=reversal_tag(symbol)
+        )
 
     def close_tagged(self, tag: str) -> bool:
         """Close every owned position carrying exactly this comment tag."""

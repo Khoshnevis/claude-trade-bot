@@ -26,7 +26,7 @@ import numpy as np
 import pandas as pd
 
 from .risk import RiskManager
-from .signals import KalmanPairsEngine, TrendEngine
+from .signals import KalmanPairsEngine, ReversalEngine, TrendEngine
 
 log = logging.getLogger("trade_bot.backtest")
 
@@ -135,6 +135,11 @@ class Backtester:
             if cfg.trend.get("enabled")
             else None
         )
+        self.reversal_engine = (
+            ReversalEngine(cfg.reversal, atr_period=cfg.risk["atr_period"])
+            if cfg.reversal.get("enabled")
+            else None
+        )
         # Reference timeline = the most common base index.
         self.ref = next(iter(data))
         self.index = data[self.ref].index
@@ -184,6 +189,8 @@ class Backtester:
 
         warmup = max(self.window, self.cfg.pairs.get("warmup_bars", 250)) + 5
         n = len(self.index)
+        cur_day = None
+        day_start_eq = start_eq
         log.info("Replaying %d bars (warmup=%d)...", n - warmup, warmup)
 
         for i in range(warmup, n):
@@ -193,27 +200,37 @@ class Backtester:
                          i - warmup, n - warmup, curve[-1] if curve else start_eq,
                          len(trades))
 
-            # 1) Manage open trend stops/targets against THIS bar's range.
-            positions = self._process_stops(positions, trades, t, i)
+            # 1) Manage open trend/reversal stops/targets against THIS bar's range.
+            positions, stop_pnl = self._process_stops(positions, trades, t, i)
+            realized += stop_pnl
 
             # 2) Mark-to-market equity (realized + open unrealized at close).
             equity = start_eq + realized + self._unrealized(positions, t)
             curve.append(equity)
             curve_idx.append(t)
 
-            # 3) Kill-switch check on the simulated equity curve.
+            # 3) Per-day anchor: reset the daily-loss halt at each new UTC day.
+            day = t.date()
+            if day != cur_day:
+                cur_day = day
+                day_start_eq = equity
+                self.risk.reset_daily()
+
+            # 4) Kill-switch check on the simulated equity curve.
             hw = max(curve)
-            self.risk.check_drawdown(equity, hw, hw)
+            self.risk.check_drawdown(equity, hw, day_start_eq)
             if self.risk.state.halted:
                 realized += self._flatten(positions, trades, t, i, "kill_switch")
                 positions = []
                 continue
 
-            # 4) Engines (decisions at this bar's close).
+            # 5) Engines (decisions at this bar's close).
             if self.pairs_engine:
                 realized += self._step_pairs(positions, trades, t, i, equity)
             if self.trend_engine:
                 realized += self._step_trend(positions, trades, t, i, equity)
+            if self.reversal_engine:
+                realized += self._step_reversal(positions, trades, t, i, equity)
 
         # Close anything still open at the final bar.
         realized += self._flatten(positions, trades, self.index[-1], n - 1, "end")
@@ -230,10 +247,11 @@ class Backtester:
             total += (p.side * (px - p.entry) / m.trade_tick_size) * m.trade_tick_value * p.volume
         return total
 
-    def _process_stops(self, positions, trades, t, i) -> list[Position]:
+    def _process_stops(self, positions, trades, t, i) -> tuple[list[Position], float]:
         survivors = []
+        realized = 0.0
         for p in positions:
-            if p.kind != "trend" or (p.sl is None and p.tp is None):
+            if p.kind not in ("trend", "reversal") or (p.sl is None and p.tp is None):
                 survivors.append(p)
                 continue
             bar = self.data[p.symbol].loc[t]
@@ -253,8 +271,8 @@ class Backtester:
             if exit_px is None:
                 survivors.append(p)
             else:
-                self._book(p, exit_px, t, i, reason, trades)
-        return survivors
+                realized += self._book(p, exit_px, t, i, reason, trades)
+        return survivors, realized
 
     def _book(self, p: Position, exit_px: float, t, i, reason, trades) -> float:
         pnl = self._pnl(p.symbol, p.side, p.volume, p.entry, exit_px)
@@ -371,6 +389,58 @@ class Backtester:
         sl = price - side * stop_dist
         tp = price + side * tp_dist
         positions.append(Position(sym, side, lots, price, sl, tp, "trend", i))
+        return True
+
+    # -- reversal -------------------------------------------------------------
+    def _step_reversal(self, positions, trades, t, i, equity) -> float:
+        pnl = 0.0
+        max_per = self.cfg.reversal.get("max_per_symbol", 1)
+        for sym in self.cfg.reversal["symbols"]:
+            if sym not in self.data:
+                continue
+            held = [p for p in positions if p.kind == "reversal" and p.symbol == sym]
+            df = self._slice(self.data[sym], t)
+            # Mean-reversion (soft TP) exit on held positions.
+            for p in list(held):
+                if self.reversal_engine.reversion_done(df, p.side):
+                    pnl += self._book(p, self._px(sym, t), t, i, "reversion", trades)
+                    positions.remove(p)
+                    held.remove(p)
+            if len(held) >= max_per:
+                continue
+            sig = self.reversal_engine.evaluate(sym, df)
+            if sig is None:
+                continue
+            if sig.action in ("enter_long", "enter_short"):
+                self.diag["reversal_entry_signal"] += 1
+            else:
+                self.diag["reversal_no_setup"] += 1
+                continue
+            if self.risk.state.halted:
+                continue
+            side = "buy" if sig.action == "enter_long" else "sell"
+            ok, _ = self.risk.can_open(sym, side, positions, self.cfg.risk["risk_per_trade"])
+            if not ok:
+                self.diag["reversal_blocked_by_risk"] += 1
+                continue
+            if not self._open_reversal(positions, sym, sig, t, i, equity):
+                self.diag["reversal_size_skip"] += 1
+            else:
+                self.diag["reversal_opened"] += 1
+        return pnl
+
+    def _open_reversal(self, positions, sym, sig, t, i, equity) -> bool:
+        m = self.meta[sym]
+        stop_dist = self.cfg.reversal["stop_atr"] * sig.atr
+        tp_dist = self.cfg.reversal["target_atr"] * sig.atr
+        lots = self.risk.lots_for_risk(m, equity, stop_dist)
+        if lots <= 0:
+            return False
+        price = self._px(sym, t)
+        side = 1 if sig.action == "enter_long" else -1
+        sl = price - side * stop_dist
+        tp = price + side * tp_dist
+        positions.append(Position(sym, side, lots, price, sl, tp, "reversal", i))
         return True
 
     def _px(self, symbol: str, t: pd.Timestamp) -> float:

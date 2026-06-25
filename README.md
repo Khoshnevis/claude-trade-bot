@@ -33,6 +33,15 @@ strict risk control.
    taken when it agrees with the slow-TF trend and the regime is "trending".
    This raises signal quality rather than just increasing trade frequency.
 
+3. **Single-instrument swing-reversal / mean-reversion** (`trade_bot/signals/reversal.py`)
+   — the higher-frequency engine. Detects a swing top/bottom, confirms with RSI
+   (oversold/overbought) **and** price being stretched several ATR from its mean,
+   then enters a counter-move sized by risk. Exits are mean-reversion based
+   (price returns to the mean / RSI normalizes). Its **SL/TP are SOFT**: the bot
+   stores them and monitors price on every poll (intrabar), closing the position
+   itself rather than parking stops on the broker. Several concurrent positions
+   across symbols are allowed.
+
 Both `statsmodels` and `hmmlearn` are **optional**: if missing, the bot logs a warning
 and degrades gracefully (cointegration gate off / regime always-on).
 

@@ -33,6 +33,7 @@ DEFAULTS: dict[str, Any] = {
     "correlation_clusters": [],
     "pairs": {"enabled": False, "pairs": []},
     "trend": {"enabled": False, "symbols": []},
+    "reversal": {"enabled": False, "symbols": []},
     "backtest": {
         "start_equity": 1000.0,
         "bars": 4000,
@@ -86,6 +87,10 @@ class Config:
     def trend(self) -> dict:
         return self.raw["trend"]
 
+    @property
+    def reversal(self) -> dict:
+        return self.raw["reversal"]
+
     def all_symbols(self) -> list[str]:
         """Every symbol referenced anywhere in the config."""
         symbols: set[str] = set()
@@ -95,6 +100,8 @@ class Config:
                 symbols.add(p["b"])
         if self.trend.get("enabled"):
             symbols.update(self.trend.get("symbols", []))
+        if self.reversal.get("enabled"):
+            symbols.update(self.reversal.get("symbols", []))
         return sorted(symbols)
 
 

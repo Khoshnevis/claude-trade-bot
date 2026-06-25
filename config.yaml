@@ -29,8 +29,8 @@ engine:
 risk:
   risk_per_trade: 0.005          # 0.5% of equity risked per trade
   max_risk_per_trade: 0.01       # hard ceiling
-  max_portfolio_heat: 0.02       # sum of open risk capped at 2% of equity
-  max_open_positions: 6
+  max_portfolio_heat: 0.04       # sum of open risk capped at 4% of equity (allows ~8 concurrent)
+  max_open_positions: 8
   max_correlated_same_dir: 1     # max same-direction positions among correlated symbols
   atr_period: 14
   atr_stop_mult: 2.0             # stop distance = atr_stop_mult * ATR
@@ -109,6 +109,26 @@ backtest:
     AUDUSD: 0.9
     NZDUSD: 1.2
     USDCAD: 1.0
+
+# -----------------------------------------------------------------------------
+# Engine 3: Single-instrument swing-reversal / mean-reversion (higher frequency)
+# Detect a swing top/bottom, confirm with RSI + stretch-from-mean, enter sized
+# by risk. SL/TP are SOFT -- monitored by the bot on every poll, not parked on
+# the broker. Several concurrent positions across symbols are allowed.
+# -----------------------------------------------------------------------------
+reversal:
+  enabled: true
+  symbols: [EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, EURJPY, GBPJPY]
+  rsi_period: 14
+  rsi_oversold: 30          # long when RSI <= this (raise to ~35 for more trades)
+  rsi_overbought: 70        # short when RSI >= this (lower to ~65 for more trades)
+  ma_period: 50             # mean used for stretch + reversion target
+  stretch_atr: 1.0          # price must be >= this many ATR from the mean
+  pivot_lookback: 20        # window to detect the swing high/low
+  pivot_confirm: 2          # swing must be within this many bars + price turning
+  stop_atr: 1.5             # SOFT stop distance (also drives position sizing)
+  target_atr: 3.0           # SOFT take-profit cap (mean-reversion exit may fire first)
+  max_per_symbol: 1         # no pyramiding within a symbol
 
 persistence:
   db_path: state.sqlite

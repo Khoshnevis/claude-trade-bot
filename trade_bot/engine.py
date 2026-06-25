@@ -18,12 +18,12 @@ from datetime import datetime, timezone
 import pandas as pd
 
 from .config import Config
-from .execution import Executor, pair_tag, trend_tag
+from .execution import Executor, _ok, pair_tag, reversal_tag, trend_tag
 from .features import atr
 from .mt5_client import MT5Client, timeframe_const
 from .persistence import StateStore
 from .risk import RiskManager
-from .signals import KalmanPairsEngine, TrendEngine
+from .signals import KalmanPairsEngine, ReversalEngine, TrendEngine
 
 log = logging.getLogger("trade_bot.engine")
 
@@ -50,6 +50,14 @@ class TradingEngine:
             if cfg.trend.get("enabled")
             else None
         )
+        self.reversal_engine = (
+            ReversalEngine(cfg.reversal, atr_period=cfg.risk["atr_period"])
+            if cfg.reversal.get("enabled")
+            else None
+        )
+        # Soft SL/TP levels for reversal positions, keyed by position ticket.
+        # Persisted so a restart keeps monitoring them.
+        self.soft_stops: dict[int, dict] = {}
         # Higher "context" timeframe for trend MTF confirmation (optional).
         self.context_tf_name = (
             cfg.trend.get("context_timeframe") if cfg.trend.get("enabled") else None
@@ -67,6 +75,7 @@ class TradingEngine:
         if self.context_tf_name:
             self.context_tf = timeframe_const(self.context_tf_name)
         self.client.ensure_symbols(self.symbols)
+        self._load_soft_stops()
         log.info("Engine started | tf=%s | context_tf=%s | symbols=%s",
                  self.tf_name, self.context_tf_name, self.symbols)
         self._loop()
@@ -81,6 +90,10 @@ class TradingEngine:
         while True:
             try:
                 self.client.ensure_connected()
+                # Soft SL/TP are checked on EVERY poll (intrabar), not just at
+                # bar close, so the bot reacts to price within the hour.
+                if self.reversal_engine:
+                    self._monitor_soft_stops()
                 if self._new_bar_ready():
                     self._on_bar()
             except KeyboardInterrupt:
@@ -125,12 +138,16 @@ class TradingEngine:
                 self._run_pairs(equity)
             if self.trend_engine:
                 self._run_trend(equity)
+            if self.reversal_engine:
+                self._run_reversal(equity)
         else:
             log.info("In blackout window; skipping new entries.")
 
-        # Always manage trend exits regardless of blackout/halt.
+        # Always manage exits regardless of blackout/halt.
         if self.trend_engine:
             self._manage_trend_exits()
+        if self.reversal_engine:
+            self._manage_reversal_exits()
 
         self._maybe_reconcile()
 
@@ -269,6 +286,130 @@ class TradingEngine:
                 log.info("Trend %s: MA flip exit.", sym)
                 self.executor.close_tagged(trend_tag(sym))
                 self.state.log_event("trend_exit", {"symbol": sym})
+
+    # -- reversal engine (soft SL/TP) ----------------------------------------
+    def _run_reversal(self, equity: float) -> None:
+        for sym in self.cfg.reversal["symbols"]:
+            df = self._data.get(sym)
+            if df is None:
+                continue
+            # No pyramiding: skip if we already hold the max for this symbol.
+            held = self.executor.owned_tags().get(reversal_tag(sym), [])
+            if len(held) >= self.cfg.reversal.get("max_per_symbol", 1):
+                continue
+            if self.risk.state.halted:
+                continue
+            sig = self.reversal_engine.evaluate(sym, df)
+            if sig is None or sig.action not in ("enter_long", "enter_short"):
+                continue
+            side = "buy" if sig.action == "enter_long" else "sell"
+            ok, why = self.risk.can_open(sym, side, self.client.positions(),
+                                         self.cfg.risk["risk_per_trade"])
+            if not ok:
+                log.info("Reversal %s blocked: %s", sym, why)
+                continue
+            self._open_reversal_sized(sym, side, sig, equity)
+
+    def _open_reversal_sized(self, sym: str, side: str, sig, equity: float) -> None:
+        info = self.client.symbol_info(sym)
+        tick = self.client.tick(sym)
+        if info is None or tick is None or sig.atr <= 0:
+            return
+        stop_dist = self.cfg.reversal["stop_atr"] * sig.atr
+        tp_dist = self.cfg.reversal["target_atr"] * sig.atr
+        lots = self.risk.lots_for_risk(info, equity, stop_dist)
+        if lots <= 0:
+            log.info("Reversal %s: too small to size within risk.", sym)
+            return
+        price = tick.ask if side == "buy" else tick.bid
+        s = 1 if side == "buy" else -1
+        soft_sl = price - s * stop_dist
+        soft_tp = price + s * tp_dist
+        res = self.executor.open_reversal(sym, side, lots)
+        if res is None or getattr(res, "retcode", None) != 10009:
+            return
+        ticket = self._resolve_ticket(sym, res)
+        if ticket is not None:
+            self.soft_stops[ticket] = {
+                "symbol": sym, "side": s, "sl": soft_sl, "tp": soft_tp,
+            }
+            self._save_soft_stops()
+        self.state.log_event("reversal_enter", {
+            "symbol": sym, "side": side, "lots": lots, "rsi": sig.rsi,
+            "soft_sl": soft_sl, "soft_tp": soft_tp, "ticket": ticket,
+        })
+
+    def _resolve_ticket(self, sym: str, res) -> int | None:
+        """Map the order result to the open position ticket."""
+        order_ticket = getattr(res, "order", None)
+        for p in self.client.positions(magic_only=True):
+            if p.symbol == sym and (p.ticket == order_ticket
+                                    or reversal_tag(sym) == (p.comment or "")):
+                if p.ticket not in self.soft_stops:
+                    return p.ticket
+        return order_ticket
+
+    def _manage_reversal_exits(self) -> None:
+        """Mean-reversion (soft TP) exits, evaluated at bar close."""
+        owned = self.executor.owned_tags()
+        for sym in self.cfg.reversal["symbols"]:
+            positions = owned.get(reversal_tag(sym), [])
+            if not positions:
+                continue
+            df = self._data.get(sym)
+            if df is None:
+                continue
+            for p in positions:
+                side = 1 if p.type == 0 else -1
+                if self.reversal_engine.reversion_done(df, side):
+                    log.info("Reversal %s: mean-reversion exit (ticket %s).",
+                             sym, p.ticket)
+                    if _ok(self.client.close_position(p)):
+                        self._drop_soft_stop(p.ticket)
+                        self.state.log_event("reversal_exit",
+                                             {"symbol": sym, "ticket": p.ticket})
+
+    def _monitor_soft_stops(self) -> None:
+        """Intrabar SL/TP check using live ticks (runs every poll)."""
+        if not self.soft_stops:
+            return
+        open_tickets = {p.ticket for p in self.client.positions(magic_only=True)}
+        for ticket in list(self.soft_stops):
+            if ticket not in open_tickets:
+                self._drop_soft_stop(ticket)  # closed elsewhere; forget it
+                continue
+            lvl = self.soft_stops[ticket]
+            tick = self.client.tick(lvl["symbol"])
+            if tick is None:
+                continue
+            # Long exits on bid; short exits on ask.
+            price = tick.bid if lvl["side"] > 0 else tick.ask
+            hit_sl = (price <= lvl["sl"]) if lvl["side"] > 0 else (price >= lvl["sl"])
+            hit_tp = (price >= lvl["tp"]) if lvl["side"] > 0 else (price <= lvl["tp"])
+            if hit_sl or hit_tp:
+                pos = next((p for p in self.client.positions(magic_only=True)
+                            if p.ticket == ticket), None)
+                if pos is not None and _ok(self.client.close_position(pos)):
+                    reason = "soft_sl" if hit_sl else "soft_tp"
+                    log.info("Reversal %s: %s hit @%.5f (ticket %s).",
+                             lvl["symbol"], reason, price, ticket)
+                    self.state.log_event(reason, {"symbol": lvl["symbol"],
+                                                  "ticket": ticket, "price": price})
+                    self._drop_soft_stop(ticket)
+
+    def _load_soft_stops(self) -> None:
+        stored = self.state.get("soft_stops", {})
+        self.soft_stops = {int(k): v for k, v in stored.items()}
+        if self.soft_stops:
+            log.info("Loaded %d soft-stop levels from state.", len(self.soft_stops))
+
+    def _save_soft_stops(self) -> None:
+        self.state.set("soft_stops", {str(k): v for k, v in self.soft_stops.items()})
+
+    def _drop_soft_stop(self, ticket: int) -> None:
+        if ticket in self.soft_stops:
+            del self.soft_stops[ticket]
+            self._save_soft_stops()
 
     @staticmethod
     def _respect_min_stop(info, stop_dist: float) -> float:
