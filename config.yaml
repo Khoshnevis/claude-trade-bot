@@ -61,8 +61,11 @@ pairs:
   exit_z: 0.3              # exit when |z| falls back inside this
   stop_z: 4.0             # hard stop if spread blows out beyond this
   warmup_bars: 250         # Kalman burn-in before signals are trusted
-  recheck_coint: true      # require Engle-Granger cointegration on rolling window
-  coint_pvalue: 0.05
+  # FX cointegration at intraday cadence is rare/unstable, so the hard gate was
+  # blocking ~99% of bars. We rely on the Kalman z-score (stop_z is the safety
+  # net) and keep cointegration available as an OPTIONAL stricter filter.
+  recheck_coint: false     # set true to require Engle-Granger cointegration
+  coint_pvalue: 0.10
   coint_lookback: 500
   coint_recheck_bars: 25   # re-test cointegration every N bars (caches between; speeds backtests)
 
@@ -80,7 +83,9 @@ trend:
   slow_ma: 200
   donchian: 55             # breakout window on the base timeframe (entry)
   # HMM regime gate: only take trend trades when regime == trending.
-  use_hmm_regime: true
+  # Disabled by default: in testing it vetoed 100% of valid breakout setups
+  # (too aggressive). Re-enable only if it measurably improves the Sharpe.
+  use_hmm_regime: false
   hmm_states: 3
   hmm_retrain_bars: 500    # refit the HMM every N bars
   hmm_lookback: 1000       # bars used to fit the HMM
