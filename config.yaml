@@ -82,6 +82,10 @@ trend:
   fast_ma: 50              # MAs are computed on context_timeframe (direction)
   slow_ma: 200
   donchian: 55             # breakout window on the base timeframe (entry)
+  # Trend-following exit: a fixed take-profit caps the rare big winners that ARE
+  # the edge. Instead let winners run with an ATR trailing (chandelier) stop.
+  use_trailing: true       # if true, NO fixed TP; trail the stop behind price
+  trail_atr_mult: 3.0      # trailing distance = this * ATR-at-entry
   # HMM regime gate: only take trend trades when regime == trending.
   # Disabled by default: in testing it vetoed 100% of valid breakout setups
   # (too aggressive). Re-enable only if it measurably improves the Sharpe.

@@ -53,6 +53,8 @@ class Position:
     kind: str            # 'trend' | 'pair' | 'reversal'
     open_i: int
     pair_id: str = ""
+    peak: float = 0.0    # most-favorable price seen (for trailing stops)
+    atr0: float = 0.0    # ATR at entry (fixes the trailing distance)
 
     @property
     def type(self) -> int:
@@ -84,6 +86,7 @@ class Result:
     equity_curve: pd.Series
     trades: list[Trade] = field(default_factory=list)
     diag: dict = field(default_factory=dict)
+    warmup: int = 0
 
     @property
     def n_trades(self) -> int:
@@ -244,7 +247,7 @@ class Backtester:
         realized += self._flatten(positions, trades, self.index[-1], n - 1, "end")
         end_eq = start_eq + realized
         return Result(start_eq, end_eq, pd.Series(curve, index=curve_idx),
-                      trades, dict(self.diag))
+                      trades, dict(self.diag), warmup)
 
     # -- position management --------------------------------------------------
     def _unrealized(self, positions: list[Position], t: pd.Timestamp) -> float:
@@ -264,6 +267,16 @@ class Backtester:
                 continue
             bar = self.data[p.symbol].loc[t]
             hi, lo = float(bar["high"]), float(bar["low"])
+            # Trailing (chandelier) stop for trend trades: ratchet the stop
+            # behind the most-favorable price so winners can run.
+            if p.kind == "trend" and self.cfg.trend.get("use_trailing") and p.atr0 > 0:
+                trail = self.cfg.trend.get("trail_atr_mult", 3.0) * p.atr0
+                if p.side > 0:
+                    p.peak = max(p.peak, hi)
+                    p.sl = max(p.sl, p.peak - trail)
+                else:
+                    p.peak = min(p.peak, lo)
+                    p.sl = min(p.sl, p.peak + trail)
             exit_px = None
             reason = ""
             if p.side > 0:
@@ -395,8 +408,10 @@ class Backtester:
         price = self._px(sym, t)
         side = 1 if sig.action == "enter_long" else -1
         sl = price - side * stop_dist
-        tp = price + side * tp_dist
-        positions.append(Position(sym, side, lots, price, sl, tp, "trend", i))
+        trailing = self.cfg.trend.get("use_trailing")
+        tp = None if trailing else price + side * tp_dist
+        positions.append(Position(sym, side, lots, price, sl, tp, "trend", i,
+                                  peak=price, atr0=sig.atr))
         return True
 
     # -- reversal -------------------------------------------------------------

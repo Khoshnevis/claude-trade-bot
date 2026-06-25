@@ -1,0 +1,84 @@
+# =============================================================================
+# Isolated trend-following evaluation config.
+# Purpose: honestly test the ONE archetype with robust long-run evidence
+# (time-series momentum / trend) on H4 bars with a D1 context filter and a
+# trailing stop that lets winners run. Pairs + reversal are OFF so the result
+# is not contaminated by the weaker engines.
+#
+# Run:  python backtest.py config.trend-h4.yaml --bars 4000 --oos
+# =============================================================================
+
+mt5:
+  terminal_path: null
+  magic: 770088
+  deviation_points: 20
+
+engine:
+  timeframe: H4            # slower bars => far less cost drag
+  poll_seconds: 30
+  history_bars: 2000
+  reconcile_seconds: 300
+  blackouts: []
+
+risk:
+  risk_per_trade: 0.005
+  max_risk_per_trade: 0.01
+  max_portfolio_heat: 0.04
+  max_open_positions: 8
+  max_correlated_same_dir: 1
+  atr_period: 14
+  atr_stop_mult: 2.0
+  atr_target_mult: 3.0      # ignored when trend.use_trailing is true
+  drawdown_kill_pct: 0.20   # wider, because trend-following has deep drawdowns
+  daily_loss_kill_pct: 0.05
+  min_volume_guard: true
+
+correlation_clusters:
+  - [EURUSD, GBPUSD]
+  - [AUDUSD, NZDUSD]
+  - [USDCAD]
+
+pairs:
+  enabled: false
+  pairs: []
+
+trend:
+  enabled: true
+  symbols: [EURUSD, GBPUSD, USDJPY, AUDUSD, NZDUSD, USDCAD, USDCHF]
+  context_timeframe: D1     # daily trend direction filter
+  fast_ma: 25               # on D1: ~5 weeks
+  slow_ma: 100              # on D1: ~5 months
+  donchian: 20              # H4 breakout (~3.3 days) for entry timing
+  use_hmm_regime: false
+  hmm_states: 3
+  hmm_retrain_bars: 500
+  hmm_lookback: 1000
+  use_trailing: true
+  trail_atr_mult: 4.0       # give trends room to breathe
+
+reversal:
+  enabled: false
+  symbols: []
+
+backtest:
+  start_equity: 1000.0
+  bars: 4000
+  history_window: 600
+  commission_per_lot_per_side: 3.5
+  slippage_pips: 0.2
+  spread_pips:
+    default: 1.0
+    EURUSD: 0.6
+    GBPUSD: 0.9
+    USDJPY: 0.7
+    AUDUSD: 0.9
+    NZDUSD: 1.2
+    USDCAD: 1.0
+    USDCHF: 1.0
+
+persistence:
+  db_path: state-trend-h4.sqlite
+
+logging:
+  level: INFO
+  file: trade_bot.log

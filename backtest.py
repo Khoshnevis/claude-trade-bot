@@ -17,7 +17,7 @@ from types import SimpleNamespace
 
 import pandas as pd
 
-from trade_bot.backtester import _BARS_PER_YEAR, Backtester, Result
+from trade_bot.backtester import _BARS_PER_YEAR, Backtester, Result, Trade
 from trade_bot.config import load_config
 from trade_bot.logging_setup import setup_logging
 from trade_bot.mt5_client import MT5Client, timeframe_const
@@ -54,6 +54,53 @@ def load_history(cfg, bars: int) -> tuple[dict, dict, dict]:
             context[sym] = client.rates(sym, ctx_tf, bars)
     client.shutdown()
     return data, context, meta
+
+
+def _sub_result(res: Result, lo_pos: int, hi_pos: int) -> Result:
+    """Slice a Result by equity-curve position range [lo_pos, hi_pos)."""
+    curve = res.equity_curve.iloc[lo_pos:hi_pos]
+    lo_i, hi_i = res.warmup + lo_pos, res.warmup + hi_pos
+    trades = [t for t in res.trades if lo_i <= t.close_i < hi_i]
+    start = float(curve.iloc[0]) if len(curve) else res.start_equity
+    end = float(curve.iloc[-1]) if len(curve) else start
+    return Result(start, end, curve, trades, {}, res.warmup)
+
+
+def print_oos(cfg, res: Result) -> None:
+    """Split the run in half and compare in-sample vs out-of-sample.
+
+    If an edge is real it should persist into the unseen second half. A result
+    that only looks good in-sample is overfit. This is the honest test.
+    """
+    n = len(res.equity_curve)
+    if n < 20:
+        return
+    mid = n // 2
+    is_res = _sub_result(res, 0, mid)
+    oos_res = _sub_result(res, mid, n)
+    bpy = _BARS_PER_YEAR.get(cfg.engine["timeframe"], 252)
+    print("\n" + "=" * 56)
+    print("  IN-SAMPLE vs OUT-OF-SAMPLE (honest consistency check)")
+    print("=" * 56)
+    print(f"  {'metric':<18}{'in-sample':>16}{'out-of-sample':>18}")
+    im, om = is_res.metrics(bpy), oos_res.metrics(bpy)
+    for key, label, scale, suf in [
+        ("total_return", "return", 100, "%"),
+        ("sharpe_annual", "sharpe", 1, ""),
+        ("max_drawdown", "max drawdown", 100, "%"),
+        ("n_trades", "trades", 1, ""),
+        ("win_rate", "win rate", 100, "%"),
+        ("expectancy", "expectancy", 1, ""),
+    ]:
+        iv, ov = im[key] * scale, om[key] * scale
+        if key in ("n_trades",):
+            print(f"  {label:<18}{iv:>16.0f}{ov:>18.0f}")
+        else:
+            print(f"  {label:<18}{iv:>15.2f}{suf}{ov:>17.2f}{suf}")
+    print("=" * 56)
+    print("  READ THIS: if out-of-sample is far worse than in-sample, the")
+    print("  result is overfit. Only an edge that survives OOS is real.")
+    print("=" * 56 + "\n")
 
 
 def print_report(cfg, res: Result) -> None:
@@ -107,6 +154,9 @@ def print_report(cfg, res: Result) -> None:
 
 def main() -> int:
     args = [a for a in sys.argv[1:]]
+    show_oos = "--oos" in args
+    if show_oos:
+        args.remove("--oos")
     bars = None
     if "--bars" in args:
         idx = args.index("--bars")
@@ -123,6 +173,8 @@ def main() -> int:
     bt = Backtester(cfg, data, context, meta, bpy)
     res = bt.run()
     print_report(cfg, res)
+    if show_oos:
+        print_oos(cfg, res)
     return 0
 
 
