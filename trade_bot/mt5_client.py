@@ -127,8 +127,17 @@ class MT5Client:
         return None
 
     # -- market data ----------------------------------------------------------
-    def rates(self, symbol: str, timeframe: int, count: int) -> pd.DataFrame:
-        rates = mt5.copy_rates_from_pos(symbol, timeframe, 0, count)
+    def rates(self, symbol: str, timeframe: int, count: int,
+              retries: int = 4) -> pd.DataFrame:
+        # The terminal lazily downloads history; the first call for a
+        # symbol/timeframe often returns nothing, so select + retry.
+        mt5.symbol_select(symbol, True)
+        rates = None
+        for attempt in range(retries):
+            rates = mt5.copy_rates_from_pos(symbol, timeframe, 0, count)
+            if rates is not None and len(rates) > 0:
+                break
+            time.sleep(0.5 * (attempt + 1))
         if rates is None or len(rates) == 0:
             raise RuntimeError(f"No rates for {symbol}: {mt5.last_error()}")
         df = pd.DataFrame(rates)

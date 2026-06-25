@@ -47,12 +47,25 @@ def load_history(cfg, bars: int) -> tuple[dict, dict, dict]:
     client.ensure_symbols(symbols)
     data, context, meta = {}, {}, {}
     for sym in symbols:
-        data[sym] = client.rates(sym, tf, bars)
-        meta[sym] = _meta_from_symbol_info(client.symbol_info(sym))
+        try:
+            data[sym] = client.rates(sym, tf, bars)
+            meta[sym] = _meta_from_symbol_info(client.symbol_info(sym))
+        except Exception as exc:  # noqa: BLE001
+            print(f"  WARNING: skipping {sym} (no base history): {exc}")
     if ctx_tf is not None:
+        # A higher TF needs far fewer bars; asking for `bars` D1/W1 candles can
+        # exceed what the terminal has cached and fail.
+        ctx_count = min(bars, 1500)
         for sym in cfg.trend.get("symbols", []):
-            context[sym] = client.rates(sym, ctx_tf, bars)
+            if sym not in data:
+                continue
+            try:
+                context[sym] = client.rates(sym, ctx_tf, ctx_count)
+            except Exception as exc:  # noqa: BLE001
+                print(f"  WARNING: no {ctx_name} context for {sym}: {exc}")
     client.shutdown()
+    if not data:
+        raise RuntimeError("No symbols could be loaded from MT5.")
     return data, context, meta
 
 
