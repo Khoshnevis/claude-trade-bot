@@ -1,5 +1,7 @@
 # Core runtime dependencies
-MetaTrader5>=5.0.45      # Official MetaQuotes Python<->terminal IPC bridge (Windows only)
+# MetaTrader5 ships wheels ONLY for Windows (win_amd64). The marker lets deps
+# install on Linux/WSL for development; live trading still requires Windows.
+MetaTrader5>=5.0.45 ; sys_platform == "win32"   # Official MetaQuotes IPC bridge
 numpy>=1.24
 pandas>=2.0
 PyYAML>=6.0
