@@ -25,10 +25,13 @@ strict risk control.
    Engle-Granger cointegration gate (`statsmodels`) refuses pairs whose relationship
    has decayed. No arbitrary rolling window; adapts through structural breaks.
 
-2. **Regime-filtered trend overlay** (`trade_bot/signals/trend.py`) — a slow dual-MA +
-   Donchian breakout, gated by a Gaussian-HMM regime filter
-   (`trade_bot/signals/regime.py`) so it only fires in trending regimes (mean-reversion
-   dies in trends, and vice versa).
+2. **Regime-filtered trend overlay with multi-timeframe confirmation**
+   (`trade_bot/signals/trend.py` + `signals/regime.py`) — direction and the
+   Gaussian-HMM regime gate are read from a higher *context* timeframe
+   (`trend.context_timeframe`, e.g. H4), while the Donchian breakout entry and
+   ATR stop fire on the base timeframe (e.g. H1). A fast-TF breakout is only
+   taken when it agrees with the slow-TF trend and the regime is "trending".
+   This raises signal quality rather than just increasing trade frequency.
 
 Both `statsmodels` and `hmmlearn` are **optional**: if missing, the bot logs a warning
 and degrades gracefully (cointegration gate off / regime always-on).

@@ -50,16 +50,25 @@ class TradingEngine:
             if cfg.trend.get("enabled")
             else None
         )
+        # Higher "context" timeframe for trend MTF confirmation (optional).
+        self.context_tf_name = (
+            cfg.trend.get("context_timeframe") if cfg.trend.get("enabled") else None
+        )
+        self.context_tf = None  # resolved after connect
         self._last_bar_time = None
         self._last_reconcile = 0.0
         self._data: dict[str, pd.DataFrame] = {}
+        self._context_data: dict[str, pd.DataFrame] = {}
 
     # -- lifecycle ------------------------------------------------------------
     def start(self) -> None:
         self.client.connect()
         self.tf = timeframe_const(self.tf_name)
+        if self.context_tf_name:
+            self.context_tf = timeframe_const(self.context_tf_name)
         self.client.ensure_symbols(self.symbols)
-        log.info("Engine started | tf=%s | symbols=%s", self.tf_name, self.symbols)
+        log.info("Engine started | tf=%s | context_tf=%s | symbols=%s",
+                 self.tf_name, self.context_tf_name, self.symbols)
         self._loop()
 
     def stop(self) -> None:
@@ -133,6 +142,13 @@ class TradingEngine:
                 self._data[sym] = self.client.rates(sym, self.tf, n)
             except Exception as exc:  # noqa: BLE001
                 log.error("Data fetch failed for %s: %s", sym, exc)
+        # Context-timeframe bars for the trend engine's MTF direction/regime.
+        if self.context_tf is not None:
+            for sym in self.cfg.trend.get("symbols", []):
+                try:
+                    self._context_data[sym] = self.client.rates(sym, self.context_tf, n)
+                except Exception as exc:  # noqa: BLE001
+                    log.error("Context data fetch failed for %s: %s", sym, exc)
 
     # -- pairs engine ---------------------------------------------------------
     def _run_pairs(self, equity: float) -> None:
@@ -194,7 +210,7 @@ class TradingEngine:
             df = self._data.get(sym)
             if df is None:
                 continue
-            sig = self.trend_engine.evaluate(sym, df)
+            sig = self.trend_engine.evaluate(sym, df, self._context_data.get(sym))
             if sig is None:
                 continue
             if sig.action not in ("enter_long", "enter_short"):
@@ -243,7 +259,7 @@ class TradingEngine:
             df = self._data.get(sym)
             if df is None:
                 continue
-            sig = self.trend_engine.evaluate(sym, df)
+            sig = self.trend_engine.evaluate(sym, df, self._context_data.get(sym))
             if sig is None:
                 continue
             is_long = pos.type == 0

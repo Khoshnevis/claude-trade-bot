@@ -71,9 +71,13 @@ pairs:
 trend:
   enabled: true
   symbols: [EURUSD, USDJPY, AUDUSD, USDCAD]
-  fast_ma: 50
+  # Multi-timeframe confirmation: DIRECTION + REGIME are read from this higher
+  # "context" timeframe, while the ENTRY breakout fires on engine.timeframe.
+  # Set to null to disable MTF and use the base timeframe for everything.
+  context_timeframe: H4
+  fast_ma: 50              # MAs are computed on context_timeframe (direction)
   slow_ma: 200
-  donchian: 55             # breakout confirmation window
+  donchian: 55             # breakout window on the base timeframe (entry)
   # HMM regime gate: only take trend trades when regime == trending.
   use_hmm_regime: true
   hmm_states: 3
