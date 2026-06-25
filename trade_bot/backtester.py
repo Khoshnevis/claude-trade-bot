@@ -50,9 +50,17 @@ class Position:
     entry: float
     sl: float | None
     tp: float | None
-    kind: str            # 'trend' | 'pair'
+    kind: str            # 'trend' | 'pair' | 'reversal'
     open_i: int
     pair_id: str = ""
+
+    @property
+    def type(self) -> int:
+        """MT5-compatible side: ORDER_TYPE_BUY=0, ORDER_TYPE_SELL=1.
+
+        Lets RiskManager.can_open treat sim positions like live ones.
+        """
+        return 0 if self.side > 0 else 1
 
 
 @dataclass
