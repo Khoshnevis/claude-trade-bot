@@ -33,6 +33,14 @@ DEFAULTS: dict[str, Any] = {
     "correlation_clusters": [],
     "pairs": {"enabled": False, "pairs": []},
     "trend": {"enabled": False, "symbols": []},
+    "backtest": {
+        "start_equity": 1000.0,
+        "bars": 4000,
+        "history_window": 1000,
+        "commission_per_lot_per_side": 3.5,
+        "slippage_pips": 0.2,
+        "spread_pips": {"default": 0.8},
+    },
     "persistence": {"db_path": "state.sqlite"},
     "logging": {"level": "INFO", "file": "trade_bot.log"},
 }

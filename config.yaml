@@ -84,6 +84,26 @@ trend:
   hmm_retrain_bars: 500    # refit the HMM every N bars
   hmm_lookback: 1000       # bars used to fit the HMM
 
+# -----------------------------------------------------------------------------
+# Backtest cost model (used ONLY by backtest.py, never by live trading).
+# Be conservative here: understating costs is the classic way to fool yourself.
+# Pips are fractional-pip aware (pip = 10 * point on 3/5-digit symbols).
+# -----------------------------------------------------------------------------
+backtest:
+  start_equity: 1000.0
+  bars: 4000                       # base-timeframe bars of history to replay
+  history_window: 1000             # bars fed to the engines each step (mirrors live)
+  commission_per_lot_per_side: 3.5 # account currency, per 1.0 lot, per side (raw/ECN)
+  slippage_pips: 0.2               # applied per side
+  spread_pips:                     # round-turn spread paid; per-symbol overrides
+    default: 0.8
+    EURUSD: 0.6
+    GBPUSD: 0.9
+    USDJPY: 0.7
+    AUDUSD: 0.9
+    NZDUSD: 1.2
+    USDCAD: 1.0
+
 persistence:
   db_path: state.sqlite
 
