@@ -265,7 +265,13 @@ class Backtester:
             if p.kind not in ("trend", "reversal") or (p.sl is None and p.tp is None):
                 survivors.append(p)
                 continue
-            bar = self.data[p.symbol].loc[t]
+            # Use the bar at-or-before t: symbols can miss a timestamp the
+            # reference symbol has (holidays / differing session gaps).
+            sub = self.data[p.symbol].loc[:t]
+            if sub.empty:
+                survivors.append(p)
+                continue
+            bar = sub.iloc[-1]
             hi, lo = float(bar["high"]), float(bar["low"])
             # Trailing (chandelier) stop for trend trades: ratchet the stop
             # behind the most-favorable price so winners can run.
