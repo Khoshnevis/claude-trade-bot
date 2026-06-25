@@ -64,6 +64,7 @@ pairs:
   recheck_coint: true      # require Engle-Granger cointegration on rolling window
   coint_pvalue: 0.05
   coint_lookback: 500
+  coint_recheck_bars: 25   # re-test cointegration every N bars (caches between; speeds backtests)
 
 # -----------------------------------------------------------------------------
 # Engine 2: Regime-filtered slow trend / momentum overlay

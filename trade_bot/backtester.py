@@ -180,9 +180,14 @@ class Backtester:
 
         warmup = max(self.window, self.cfg.pairs.get("warmup_bars", 250)) + 5
         n = len(self.index)
+        log.info("Replaying %d bars (warmup=%d)...", n - warmup, warmup)
 
         for i in range(warmup, n):
             t = self.index[i]
+            if (i - warmup) % 500 == 0 and i > warmup:
+                log.info("  progress %d/%d bars | equity=%.2f | trades=%d",
+                         i - warmup, n - warmup, curve[-1] if curve else start_eq,
+                         len(trades))
 
             # 1) Manage open trend stops/targets against THIS bar's range.
             positions = self._process_stops(positions, trades, t, i)

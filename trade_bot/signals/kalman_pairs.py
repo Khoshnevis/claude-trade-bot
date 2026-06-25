@@ -76,6 +76,10 @@ class KalmanPairsEngine:
         self.exit_z = cfg["exit_z"]
         self.stop_z = cfg["stop_z"]
         self.warmup = cfg["warmup_bars"]
+        # Cointegration is expensive; re-test only every N evaluations per pair
+        # (live runs hourly so this is a no-op there; it speeds up backtests a lot).
+        self._coint_recheck = cfg.get("coint_recheck_bars", 25)
+        self._coint_cache: dict[tuple[str, str], tuple[int, bool]] = {}
 
     def evaluate(self, a: str, b: str, df_a: pd.DataFrame,
                  df_b: pd.DataFrame) -> PairSignal | None:
@@ -87,7 +91,7 @@ class KalmanPairsEngine:
             log.debug("%s/%s: insufficient aligned history (%d bars)", a, b, len(joined))
             return None
 
-        if self.cfg.get("recheck_coint") and not self._is_cointegrated(joined):
+        if self.cfg.get("recheck_coint") and not self._cointegrated_cached(a, b, joined):
             return PairSignal(a, b, "hold", 0.0, 0.0, 0.0, note="not cointegrated")
 
         kf = _KalmanHedge(self.cfg["delta"], self.cfg["ve"])
@@ -112,6 +116,14 @@ class KalmanPairsEngine:
         elif abs(z) <= self.exit_z:
             action = "exit"
         return PairSignal(a, b, action, z, float(last_beta), float(last_std))
+
+    def _cointegrated_cached(self, a: str, b: str, joined: pd.DataFrame) -> bool:
+        key = (a, b)
+        count, verdict = self._coint_cache.get(key, (0, None))
+        if verdict is None or count % self._coint_recheck == 0:
+            verdict = self._is_cointegrated(joined)
+        self._coint_cache[key] = (count + 1, verdict)
+        return verdict
 
     def _is_cointegrated(self, joined: pd.DataFrame) -> bool:
         if coint is None:

@@ -19,6 +19,11 @@ except Exception:  # pragma: no cover
 
 log = logging.getLogger("trade_bot.regime")
 
+# hmmlearn emits noisy "Model is not converging" lines to the root logger on
+# every refit. Non-convergence is harmless here (we cap iterations on purpose),
+# so silence its logger to keep our output readable.
+logging.getLogger("hmmlearn").setLevel(logging.ERROR)
+
 
 class RegimeFilter:
     def __init__(self, n_states: int = 3, retrain_bars: int = 500,
