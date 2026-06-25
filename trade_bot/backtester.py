@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import math
+from collections import defaultdict
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 
@@ -74,6 +75,7 @@ class Result:
     end_equity: float
     equity_curve: pd.Series
     trades: list[Trade] = field(default_factory=list)
+    diag: dict = field(default_factory=dict)
 
     @property
     def n_trades(self) -> int:
@@ -136,6 +138,8 @@ class Backtester:
         # Reference timeline = the most common base index.
         self.ref = next(iter(data))
         self.index = data[self.ref].index
+        # Why-no-trade diagnostics (tallied across the replay).
+        self.diag: dict[str, int] = defaultdict(int)
 
     # -- cost model -----------------------------------------------------------
     def _round_turn_cost(self, symbol: str, volume: float) -> float:
@@ -214,7 +218,8 @@ class Backtester:
         # Close anything still open at the final bar.
         realized += self._flatten(positions, trades, self.index[-1], n - 1, "end")
         end_eq = start_eq + realized
-        return Result(start_eq, end_eq, pd.Series(curve, index=curve_idx), trades)
+        return Result(start_eq, end_eq, pd.Series(curve, index=curve_idx),
+                      trades, dict(self.diag))
 
     # -- position management --------------------------------------------------
     def _unrealized(self, positions: list[Position], t: pd.Timestamp) -> float:
@@ -277,6 +282,13 @@ class Backtester:
             sig = self.pairs_engine.evaluate(a, b, df_a, df_b)
             if sig is None:
                 continue
+            # Diagnostics: why is/isn't this pair trading?
+            if sig.note == "not cointegrated":
+                self.diag["pair_coint_block"] += 1
+            elif sig.action in ("enter_long", "enter_short"):
+                self.diag["pair_entry_signal"] += 1
+            else:
+                self.diag["pair_cointegrated_no_entry"] += 1
             if legs and sig.action in ("exit", "enter_long", "enter_short"):
                 # close on exit/stop OR on a flip; re-entry handled next bars
                 if sig.action == "exit":
@@ -287,16 +299,20 @@ class Backtester:
             if not legs and sig.action in ("enter_long", "enter_short") and not self.risk.state.halted:
                 ok, _ = self.risk.can_open(a, sig.action, positions, self.cfg.risk["risk_per_trade"])
                 if not ok:
+                    self.diag["pair_blocked_by_risk"] += 1
                     continue
-                self._open_pair(positions, a, b, pid, sig, t, i, equity)
+                if not self._open_pair(positions, a, b, pid, sig, t, i, equity):
+                    self.diag["pair_size_skip"] += 1
+                else:
+                    self.diag["pair_opened"] += 1
         return pnl
 
-    def _open_pair(self, positions, a, b, pid, sig, t, i, equity) -> None:
+    def _open_pair(self, positions, a, b, pid, sig, t, i, equity) -> bool:
         stop_dist = max((self.cfg.pairs["stop_z"] - self.cfg.pairs["entry_z"]) * sig.spread_std,
                         sig.spread_std)
         lots_y = self.risk.lots_for_risk(self.meta[a], equity, stop_dist)
         if lots_y <= 0:
-            return
+            return False
         beta = abs(sig.beta) if sig.beta else 1.0
         lots_x = self.risk._round_volume(self.meta[b], lots_y * beta)
         if lots_x <= 0:
@@ -304,6 +320,7 @@ class Backtester:
         side_y = 1 if sig.action == "enter_long" else -1
         positions.append(Position(a, side_y, lots_y, self._px(a, t), None, None, "pair", i, pid))
         positions.append(Position(b, -side_y, lots_x, self._px(b, t), None, None, "pair", i, pid))
+        return True
 
     # -- trend ----------------------------------------------------------------
     def _step_trend(self, positions, trades, t, i, equity) -> float:
@@ -316,6 +333,13 @@ class Backtester:
                                              self._ctx_slice(sym, t))
             if sig is None:
                 continue
+            # Diagnostics for the trend gate.
+            if sig.note == "regime=ranging":
+                self.diag["trend_regime_block"] += 1
+            elif sig.action in ("enter_long", "enter_short"):
+                self.diag["trend_entry_signal"] += 1
+            else:
+                self.diag["trend_no_setup"] += 1
             if held:
                 p = held[0]
                 if (p.side > 0 and sig.action == "exit_long_if_held") or \
@@ -327,22 +351,27 @@ class Backtester:
                 side = "buy" if sig.action == "enter_long" else "sell"
                 ok, _ = self.risk.can_open(sym, side, positions, self.cfg.risk["risk_per_trade"])
                 if not ok or sig.atr <= 0:
+                    self.diag["trend_blocked_by_risk"] += 1
                     continue
-                self._open_trend(positions, sym, sig, t, i, equity)
+                if not self._open_trend(positions, sym, sig, t, i, equity):
+                    self.diag["trend_size_skip"] += 1
+                else:
+                    self.diag["trend_opened"] += 1
         return pnl
 
-    def _open_trend(self, positions, sym, sig, t, i, equity) -> None:
+    def _open_trend(self, positions, sym, sig, t, i, equity) -> bool:
         m = self.meta[sym]
         stop_dist = self.cfg.risk["atr_stop_mult"] * sig.atr
         tp_dist = self.cfg.risk["atr_target_mult"] * sig.atr
         lots = self.risk.lots_for_risk(m, equity, stop_dist)
         if lots <= 0:
-            return
+            return False
         price = self._px(sym, t)
         side = 1 if sig.action == "enter_long" else -1
         sl = price - side * stop_dist
         tp = price + side * tp_dist
         positions.append(Position(sym, side, lots, price, sl, tp, "trend", i))
+        return True
 
     def _px(self, symbol: str, t: pd.Timestamp) -> float:
         return float(self.data[symbol].loc[:t]["close"].iloc[-1])

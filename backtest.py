@@ -75,6 +75,26 @@ def print_report(cfg, res: Result) -> None:
     pf = m["profit_factor"]
     print(f"  Profit factor    : {'inf' if pf == float('inf') else f'{pf:.2f}'}")
     print("=" * 56)
+    if res.diag:
+        print("  WHY-NO-TRADE DIAGNOSTICS (bar-evaluation tallies)")
+        labels = {
+            "pair_coint_block": "pairs: cointegration gate blocked",
+            "pair_cointegrated_no_entry": "pairs: cointegrated but |z| < entry",
+            "pair_entry_signal": "pairs: entry signals fired",
+            "pair_blocked_by_risk": "pairs: blocked by risk gate",
+            "pair_size_skip": "pairs: skipped (lot < volume_min)",
+            "pair_opened": "pairs: positions opened",
+            "trend_regime_block": "trend: HMM regime = ranging (blocked)",
+            "trend_no_setup": "trend: no MTF+breakout setup",
+            "trend_entry_signal": "trend: entry signals fired",
+            "trend_blocked_by_risk": "trend: blocked by risk gate",
+            "trend_size_skip": "trend: skipped (lot < volume_min)",
+            "trend_opened": "trend: positions opened",
+        }
+        for k, label in labels.items():
+            if k in res.diag:
+                print(f"    {label:<42}: {res.diag[k]}")
+        print("=" * 56)
     print("  NOTE: single-path backtest = weak evidence. Costs are modeled, not")
     print("  guaranteed. Validate out-of-sample before risking real capital.")
     print("=" * 56 + "\n")
