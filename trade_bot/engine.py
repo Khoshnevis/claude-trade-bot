@@ -146,6 +146,8 @@ class TradingEngine:
         # Always manage exits regardless of blackout/halt.
         if self.trend_engine:
             self._manage_trend_exits()
+            if self.cfg.trend.get("use_trailing"):
+                self._manage_trend_trailing()
         if self.reversal_engine:
             self._manage_reversal_exits()
 
@@ -253,16 +255,19 @@ class TradingEngine:
         tp_dist = self.cfg.risk["atr_target_mult"] * sig.atr
         stop_dist = self._respect_min_stop(info, stop_dist)
         price = tick.ask if side == "buy" else tick.bid
+        trailing = self.cfg.trend.get("use_trailing")
         if side == "buy":
-            sl, tp = price - stop_dist, price + tp_dist
+            sl = price - stop_dist
+            tp = None if trailing else price + tp_dist
         else:
-            sl, tp = price + stop_dist, price - tp_dist
+            sl = price + stop_dist
+            tp = None if trailing else price - tp_dist
         lots = self.risk.lots_for_risk(info, equity, stop_dist)
         if lots <= 0:
             log.info("Trend %s: too small to size within risk.", sym)
             return
-        if self.executor.open_trend(sym, side, lots, round(sl, info.digits),
-                                    round(tp, info.digits)):
+        tp_round = round(tp, info.digits) if tp is not None else 0.0
+        if self.executor.open_trend(sym, side, lots, round(sl, info.digits), tp_round):
             self.state.log_event("trend_enter", {
                 "symbol": sym, "side": side, "lots": lots,
                 "sl": sl, "tp": tp, "atr": sig.atr,
@@ -410,6 +415,46 @@ class TradingEngine:
         if ticket in self.soft_stops:
             del self.soft_stops[ticket]
             self._save_soft_stops()
+
+    def _manage_trend_trailing(self) -> None:
+        """Ratchet each trend position's stop behind price (chandelier stop),
+        so the live engine lets winners run exactly like the backtester."""
+        trail_mult = self.cfg.trend.get("trail_atr_mult", 3.0)
+        for sym in self.cfg.trend["symbols"]:
+            pos = self.executor.trend_position(sym)
+            df = self._data.get(sym)
+            if pos is None or df is None:
+                continue
+            info = self.client.symbol_info(sym)
+            atr_now = atr(df, self.cfg.risk["atr_period"])
+            if atr_now <= 0 or info is None:
+                continue
+            entry_time = pd.to_datetime(pos.time, unit="s", utc=True)
+            since = df[df.index >= entry_time]
+            if since.empty:
+                since = df.tail(1)
+            trail = trail_mult * atr_now
+            is_long = pos.type == 0
+            if is_long:
+                new_sl = float(since["high"].max()) - trail
+                better = new_sl > pos.sl + info.point
+            else:
+                new_sl = float(since["low"].min()) + trail
+                better = new_sl < pos.sl - info.point
+            new_sl = self._cap_stop_to_market(info, sym, is_long, new_sl)
+            if better and new_sl is not None:
+                if _ok(self.client.modify_sl(pos, round(new_sl, info.digits))):
+                    log.info("Trend %s: trailed SL -> %.5f", sym, new_sl)
+
+    def _cap_stop_to_market(self, info, sym, is_long, sl):
+        """Keep the trailing stop a valid distance from current price."""
+        tick = self.client.tick(sym)
+        if tick is None:
+            return sl
+        min_dist = getattr(info, "trade_stops_level", 0) * getattr(info, "point", 0.0)
+        if is_long:
+            return min(sl, tick.bid - min_dist) if min_dist else sl
+        return max(sl, tick.ask + min_dist) if min_dist else sl
 
     @staticmethod
     def _respect_min_stop(info, stop_dist: float) -> float:

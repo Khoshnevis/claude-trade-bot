@@ -194,6 +194,23 @@ class MT5Client:
             request["tp"] = float(tp)
         return self._send_with_retry(request, symbol)
 
+    def modify_sl(self, position, sl: float, tp: float | None = None) -> Any:
+        """Move a position's stop-loss (used for trailing stops)."""
+        request = {
+            "action": mt5.TRADE_ACTION_SLTP,
+            "symbol": position.symbol,
+            "position": position.ticket,
+            "sl": float(sl),
+            "tp": float(tp) if tp is not None else float(position.tp),
+            "magic": self.magic,
+        }
+        result = mt5.order_send(request)
+        if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
+            rc = getattr(result, "retcode", "None")
+            log.warning("modify_sl failed %s ticket=%s sl=%.5f retcode=%s",
+                        position.symbol, position.ticket, sl, rc)
+        return result
+
     def close_position(self, position) -> Any:
         symbol = position.symbol
         tick = mt5.symbol_info_tick(symbol)
