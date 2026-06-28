@@ -39,17 +39,32 @@ def _arg(args: list[str], name: str, cast, default):
     return default
 
 
+def _payoff(labels, sl_atr, tp_atr, cost_atr) -> np.ndarray:
+    return np.where(labels == 1, tp_atr, -sl_atr) - cost_atr
+
+
 def _expectancy(labels, sl_atr, tp_atr, cost_atr) -> dict:
-    """Trade stats in ATR (R) units for a set of taken signals."""
+    """Trade stats in ATR (R) units, with a t-stat for significance."""
     if len(labels) == 0:
-        return {"n": 0, "win_rate": 0.0, "expectancy_R": 0.0}
-    wins = labels == 1
-    payoff = np.where(wins, tp_atr, -sl_atr) - cost_atr
+        return {"n": 0, "win_rate": 0.0, "expectancy_R": 0.0, "t": 0.0}
+    payoff = _payoff(labels, sl_atr, tp_atr, cost_atr)
+    mean = float(payoff.mean())
+    std = float(payoff.std(ddof=1)) if len(payoff) > 1 else 0.0
+    t = mean / (std / np.sqrt(len(payoff))) if std > 0 else 0.0
     return {
         "n": int(len(labels)),
-        "win_rate": float(wins.mean()),
-        "expectancy_R": float(payoff.mean()),
+        "win_rate": float((labels == 1).mean()),
+        "expectancy_R": mean,
+        "t": float(t),
     }
+
+
+def _cost_sweep(labels, sl_atr, tp_atr) -> str:
+    cells = []
+    for c in (0.0, 0.1, 0.2, 0.3):
+        e = _expectancy(labels, sl_atr, tp_atr, c)["expectancy_R"]
+        cells.append(f"{c:>4}:{e:+.3f}")
+    return "  ".join(cells)
 
 
 def main() -> int:
@@ -79,6 +94,7 @@ def main() -> int:
     split = int(len(X) * 0.7)
     Xtr, ytr = X.iloc[:split], y.iloc[:split]
     Xte, yte = X.iloc[split:], y.iloc[split:]
+    lab_tr = meta["label"].to_numpy()[:split]
     lab_te = meta["label"].to_numpy()[split:]
 
     clf = MetaLabeler()
@@ -100,22 +116,35 @@ def main() -> int:
     print(f"  Classifier AUC  : train {tr_m['auc']:.3f} | OOS {te_m['auc']:.3f}")
     print(f"  Classifier acc. : train {tr_m['accuracy']:.3f} | OOS {te_m['accuracy']:.3f}")
     print("-" * 60)
-    print(f"  OUT-OF-SAMPLE trade economics (R = ATR units, cost {cost_atr} R):")
-    print(f"    {'':<22}{'take ALL':>14}{'ML-gated':>14}")
-    print(f"    {'trades taken':<22}{ungated_stats['n']:>14}{gated_stats['n']:>14}")
-    print(f"    {'win rate':<22}{ungated_stats['win_rate']*100:>13.1f}%{gated_stats['win_rate']*100:>13.1f}%")
-    print(f"    {'expectancy (R/trade)':<22}{ungated_stats['expectancy_R']:>14.3f}{gated_stats['expectancy_R']:>14.3f}")
+    # The RAW primary signal is the real subject of interest: does the breakout
+    # rule itself have an edge, in both halves and across realistic costs?
+    is_raw = _expectancy(lab_tr, sl_atr, tp_atr, cost_atr)
+    oos_raw = _expectancy(lab_te, sl_atr, tp_atr, cost_atr)
+    print(f"  RAW PRIMARY SIGNAL (no ML), R = ATR units, cost {cost_atr} R:")
+    print(f"    {'':<16}{'in-sample':>14}{'out-of-sample':>16}")
+    print(f"    {'trades':<16}{is_raw['n']:>14}{oos_raw['n']:>16}")
+    print(f"    {'win rate':<16}{is_raw['win_rate']*100:>13.1f}%{oos_raw['win_rate']*100:>15.1f}%")
+    print(f"    {'expectancy R':<16}{is_raw['expectancy_R']:>14.3f}{oos_raw['expectancy_R']:>16.3f}")
+    print(f"    {'t-stat':<16}{is_raw['t']:>14.2f}{oos_raw['t']:>16.2f}")
+    print(f"    cost sweep IS : {_cost_sweep(lab_tr, sl_atr, tp_atr)}")
+    print(f"    cost sweep OOS: {_cost_sweep(lab_te, sl_atr, tp_atr)}")
+    print("-" * 60)
+    print(f"  ML GATING vs RAW (OOS, cost {cost_atr} R):")
+    print(f"    take ALL : n={ungated_stats['n']:<4} exp={ungated_stats['expectancy_R']:+.3f} R")
+    print(f"    ML-gated : n={gated_stats['n']:<4} exp={gated_stats['expectancy_R']:+.3f} R")
     print("=" * 60)
-    better = gated_stats["expectancy_R"] > max(ungated_stats["expectancy_R"], 0)
-    if te_m["auc"] < 0.52:
-        print("  VERDICT: OOS AUC ~ 0.5 -> the model has no predictive signal.")
-        print("  The ML layer is not helping. Do NOT trade this.")
-    elif better:
-        print("  VERDICT: ML gating improves OOS expectancy AND it is positive.")
-        print("  Promising -- but still validate live on demo before real money.")
+    # Verdicts: ML and the raw signal are judged separately.
+    if te_m["auc"] < 0.52 or gated_stats["expectancy_R"] <= ungated_stats["expectancy_R"]:
+        print("  ML: no value (OOS AUC ~0.5 or gating doesn't beat raw). Drop it.")
     else:
-        print("  VERDICT: gating does not produce a positive OOS edge.")
-        print("  Honest result: no tradable edge found here.")
+        print("  ML: gating improves OOS expectancy -- worth keeping.")
+    if oos_raw["expectancy_R"] > 0 and oos_raw["t"] >= 2.0:
+        print("  RAW SIGNAL: positive AND statistically significant (t>=2). Strong.")
+    elif oos_raw["expectancy_R"] > 0:
+        print("  RAW SIGNAL: positive but NOT yet significant (t<2). Promising;")
+        print("  needs more trades/data + realistic costs before trusting.")
+    else:
+        print("  RAW SIGNAL: no positive out-of-sample edge.")
     print("=" * 60 + "\n")
     return 0
 

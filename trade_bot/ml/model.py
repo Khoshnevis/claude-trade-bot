@@ -16,16 +16,18 @@ from .pipeline import FEATURE_COLUMNS
 
 class MetaLabeler:
     def __init__(self):
-        from sklearn.ensemble import GradientBoostingClassifier
+        from sklearn.linear_model import LogisticRegression
         from sklearn.pipeline import Pipeline
         from sklearn.preprocessing import StandardScaler
 
         self.columns = FEATURE_COLUMNS + ["side"]
+        # A regularized LINEAR model: on low signal-to-noise data it generalizes
+        # far better than gradient boosting (which memorized the training set,
+        # AUC ~1.0, and was worse than random out-of-sample).
         self.model = Pipeline([
             ("scaler", StandardScaler()),
-            ("clf", GradientBoostingClassifier(
-                n_estimators=120, max_depth=3, learning_rate=0.05,
-                subsample=0.8, random_state=42,
+            ("clf", LogisticRegression(
+                C=0.3, max_iter=2000, class_weight="balanced",
             )),
         ])
         self._fitted = False
