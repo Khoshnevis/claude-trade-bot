@@ -9,3 +9,5 @@ PyYAML>=6.0
 # Optional but recommended (the bot degrades gracefully if these are missing)
 statsmodels>=0.14        # Engle-Granger cointegration / ADF tests for pair selection
 hmmlearn>=0.3            # Gaussian HMM regime filter (optional gate)
+scikit-learn>=1.3        # meta-label classifier for the gold ML strategy
+joblib>=1.3             # persist/load the trained meta-label model

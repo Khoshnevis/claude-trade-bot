@@ -3,6 +3,8 @@ __pycache__/
 *.log
 *.sqlite
 *.sqlite-journal
+*.joblib
+models/
 .venv/
 venv/
 .env

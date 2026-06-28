@@ -45,6 +45,26 @@ strict risk control.
 Both `statsmodels` and `hmmlearn` are **optional**: if missing, the bot logs a warning
 and degrades gracefully (cointegration gate off / regime always-on).
 
+### Gold (XAUUSD) meta-labeling ML
+
+`trade_bot/ml/` is a meta-labeling pipeline (López de Prado style). The ML model
+does **not** predict price. A rule-based *primary* signal (a breakout that agrees
+with the EMA trend — gold trends well) proposes a side+timing; a scikit-learn
+classifier estimates `P(this signal is profitable)` from features (RSI, ADX,
+ATR, distance-from-EMA, volatility, hour, …), and only signals above a
+probability threshold are taken. Training labels come from the **triple-barrier**
+method, and evaluation is strictly **out-of-sample** (train on the first 70%,
+test on the unseen last 30%).
+
+```bash
+python train_gold_ml.py --symbol XAUUSD --tf H1 --bars 6000 --threshold 0.55
+```
+
+The report compares OOS economics of *taking all primary signals* vs *taking
+only ML-approved ones*. The ML layer earns its place **only if it raises
+out-of-sample expectancy**; a large train-vs-OOS AUC gap means overfitting and
+the model should not be trusted. Models are saved to `models/` (gitignored).
+
 ## Risk management (`trade_bot/risk.py`)
 
 - **Fixed-fractional sizing:** 0.5% of equity risked per trade (hard ceiling 1%),
