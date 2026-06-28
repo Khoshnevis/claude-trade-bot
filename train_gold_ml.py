@@ -67,6 +67,24 @@ def _cost_sweep(labels, sl_atr, tp_atr) -> str:
     return "  ".join(cells)
 
 
+def _robustness_breakdown(meta, sl_atr, tp_atr, cost_atr) -> None:
+    """The decisive test: is the edge stable across TIME and SIDE, or is it
+    just riding the recent gold trend (one period, long-only)?"""
+    labels = meta["label"].to_numpy()
+    sides = meta["side"].to_numpy()
+    print("-" * 60)
+    print(f"  ROBUSTNESS (cost {cost_atr} R) -- a real edge is positive across")
+    print("  ALL time folds AND on both sides; one good fold = regime luck:")
+    folds = np.array_split(np.arange(len(labels)), 5)
+    print(f"    {'fold':<10}{'n':>6}{'win%':>8}{'exp R':>10}")
+    for k, idx in enumerate(folds, 1):
+        e = _expectancy(labels[idx], sl_atr, tp_atr, cost_atr)
+        print(f"    {('T'+str(k)):<10}{e['n']:>6}{e['win_rate']*100:>7.0f}%{e['expectancy_R']:>10.3f}")
+    for name, mask in (("long", sides == 1), ("short", sides == -1)):
+        e = _expectancy(labels[mask], sl_atr, tp_atr, cost_atr)
+        print(f"    {name:<10}{e['n']:>6}{e['win_rate']*100:>7.0f}%{e['expectancy_R']:>10.3f}")
+
+
 def main() -> int:
     args = sys.argv[1:]
     symbol = _arg(args, "symbol", str, DEFAULTS["symbol"])
@@ -128,6 +146,7 @@ def main() -> int:
     print(f"    {'t-stat':<16}{is_raw['t']:>14.2f}{oos_raw['t']:>16.2f}")
     print(f"    cost sweep IS : {_cost_sweep(lab_tr, sl_atr, tp_atr)}")
     print(f"    cost sweep OOS: {_cost_sweep(lab_te, sl_atr, tp_atr)}")
+    _robustness_breakdown(meta, sl_atr, tp_atr, cost_atr)
     print("-" * 60)
     print(f"  ML GATING vs RAW (OOS, cost {cost_atr} R):")
     print(f"    take ALL : n={ungated_stats['n']:<4} exp={ungated_stats['expectancy_R']:+.3f} R")
