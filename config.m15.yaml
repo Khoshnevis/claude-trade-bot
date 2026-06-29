@@ -1,0 +1,94 @@
+# =============================================================================
+# M15 (15-minute) evaluation config.
+# Purpose: let the DATA show what lower-timeframe trading does to net edge once
+# realistic costs are charged. The same spread is a much larger fraction of a
+# small M15 move, so the cost hurdle per trade is far higher than on H4.
+#
+# Run:  python backtest.py config.m15.yaml --bars 10000 --oos
+# =============================================================================
+
+mt5:
+  terminal_path: null
+  magic: 770088
+  deviation_points: 20
+
+engine:
+  timeframe: M15
+  poll_seconds: 10
+  history_bars: 3000
+  reconcile_seconds: 300
+  blackouts:
+    - "23:55-00:10"
+
+risk:
+  risk_per_trade: 0.005
+  max_risk_per_trade: 0.01
+  max_portfolio_heat: 0.04
+  max_open_positions: 8
+  max_correlated_same_dir: 1
+  atr_period: 14
+  atr_stop_mult: 2.0
+  atr_target_mult: 3.0
+  drawdown_kill_pct: 0.15
+  daily_loss_kill_pct: 0.04
+  min_volume_guard: true
+
+correlation_clusters:
+  - [EURUSD, GBPUSD]
+  - [AUDUSD, NZDUSD]
+  - [USDCAD]
+
+pairs:
+  enabled: false
+  pairs: []
+
+# Trend on M15 with an H1 context filter + trailing stop.
+trend:
+  enabled: true
+  symbols: [EURUSD, GBPUSD, USDJPY, XAUUSD]
+  context_timeframe: H1
+  fast_ma: 50
+  slow_ma: 200
+  donchian: 20
+  use_hmm_regime: false
+  hmm_states: 3
+  hmm_retrain_bars: 500
+  hmm_lookback: 1000
+  use_trailing: true
+  trail_atr_mult: 3.0
+
+# Mean-reversion on M15 (the more natural lower-timeframe play).
+reversal:
+  enabled: true
+  symbols: [EURUSD, GBPUSD, USDJPY, AUDUSD, XAUUSD]
+  rsi_period: 14
+  rsi_oversold: 30
+  rsi_overbought: 70
+  ma_period: 50
+  stretch_atr: 1.0
+  pivot_lookback: 20
+  pivot_confirm: 2
+  stop_atr: 1.5
+  target_atr: 2.5
+  max_per_symbol: 1
+
+backtest:
+  start_equity: 1000.0
+  bars: 10000
+  history_window: 800
+  commission_per_lot_per_side: 3.5
+  slippage_pips: 0.3
+  spread_pips:
+    default: 1.0
+    EURUSD: 0.6
+    GBPUSD: 0.9
+    USDJPY: 0.7
+    AUDUSD: 0.9
+    XAUUSD: 30.0     # gold: ~"30 points" ≈ $0.30 round-turn (VERIFY your broker)
+
+persistence:
+  db_path: state-m15.sqlite
+
+logging:
+  level: INFO
+  file: trade_bot.log
