@@ -156,6 +156,9 @@ class Backtester:
         self.index = data[self.ref].index
         # Why-no-trade diagnostics (tallied across the replay).
         self.diag: dict[str, int] = defaultdict(int)
+        # Research mode: skip the permanent drawdown halt so the FULL period
+        # (and a meaningful OOS half) is evaluated instead of truncated.
+        self.disable_killswitch = False
 
     # -- cost model -----------------------------------------------------------
     def _round_turn_cost(self, symbol: str, volume: float) -> float:
@@ -227,13 +230,15 @@ class Backtester:
                 day_start_eq = equity
                 self.risk.reset_daily()
 
-            # 4) Kill-switch check on the simulated equity curve.
-            hw = max(curve)
-            self.risk.check_drawdown(equity, hw, day_start_eq)
-            if self.risk.state.halted:
-                realized += self._flatten(positions, trades, t, i, "kill_switch")
-                positions = []
-                continue
+            # 4) Kill-switch check on the simulated equity curve (unless research
+            # mode disables it so we can see the full-period / OOS result).
+            if not self.disable_killswitch:
+                hw = max(curve)
+                self.risk.check_drawdown(equity, hw, day_start_eq)
+                if self.risk.state.halted:
+                    realized += self._flatten(positions, trades, t, i, "kill_switch")
+                    positions = []
+                    continue
 
             # 5) Engines (decisions at this bar's close).
             if self.pairs_engine:

@@ -170,6 +170,9 @@ def main() -> int:
     show_oos = "--oos" in args
     if show_oos:
         args.remove("--oos")
+    no_ks = "--no-killswitch" in args
+    if no_ks:
+        args.remove("--no-killswitch")
     bars = None
     if "--bars" in args:
         idx = args.index("--bars")
@@ -184,6 +187,9 @@ def main() -> int:
     data, context, meta = load_history(cfg, bars)
     bpy = _BARS_PER_YEAR.get(cfg.engine["timeframe"], 252)
     bt = Backtester(cfg, data, context, meta, bpy)
+    bt.disable_killswitch = no_ks
+    if no_ks:
+        print("  (research mode: drawdown kill-switch disabled -> full period)")
     res = bt.run()
     print_report(cfg, res)
     if show_oos:
